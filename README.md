@@ -28,6 +28,7 @@ git clone https://github.com/thu-ml/SageAttention.git
 cd SageAttention
 pip install -r requirements.txt
 python setup.py install
+```
 
 ## 📚Citation
 
@@ -40,3 +41,4 @@ If you find MOD-DiT useful or relevant to your research, please cite our paper:
   journal={arXiv preprint arXiv:2601.11641},
   year={2026}
 }
+```
