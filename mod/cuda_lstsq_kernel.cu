@@ -314,16 +314,15 @@ __global__ void compute_vert_block_kernel(
     results[i] = overlap;
 }
 
-// 主函数：计算完整的M^T·M矩阵
-// 返回(head, total_features, total_features)的矩阵
+// 主函数：计算单份M^T·M矩阵
+// 所有attention head共享同一个结构矩阵，返回(total_features, total_features)
 torch::Tensor compute_mtm_cuda(
-    torch::Tensor S_T,  // (head, n, n)矩阵（仅用于获取shape）
+    torch::Tensor S_T,  // (head, n, n)矩阵（仅用于获取shape和device）
     int blocks_per_frame,  // 每个块的大小
     float regularization = 1e-3
 ) {
     // 已根据 Python 端 compute_mtm_pytorch 修改：移除与 S_0 的交叉项计算，
     // MTM 现在只包含 C（对角线）、D（垂直线）和 E（块）三类特征的内积。
-    const int head_num = S_T.size(0);
     const int n = S_T.size(1);
     const int num_diags = 2 * n - 1;
     const int total_features = num_diags + n + 1;  // C (num_diags), D (n), E (1)
@@ -333,7 +332,7 @@ torch::Tensor compute_mtm_cuda(
         .dtype(torch::kFloat32)
         .device(S_T.device());
 
-    torch::Tensor MTM = torch::zeros({head_num, total_features, total_features}, options);
+    torch::Tensor MTM = torch::zeros({total_features, total_features}, options);
 
     // 计算对角线-对角线、垂直-垂直、对角-垂直、对角-块、垂直-块、块-块（与 head 无关或共享）
     // 复用已有 kernel 计算这些项（kernel 已在文件中定义）
@@ -388,37 +387,32 @@ torch::Tensor compute_mtm_cuda(
 
     cudaDeviceSynchronize();
 
-    // 填充 MTM（所有 head 共享这些结构化值）
-    for (int h = 0; h < head_num; h++) {
-        // C block
-        MTM.index_put_({h, torch::indexing::Slice(0, 0 + num_diags), 
-                       torch::indexing::Slice(0, 0 + num_diags)}, diag_diag);
-        // D block
-        MTM.index_put_({h, torch::indexing::Slice(num_diags, num_diags + n),
-                       torch::indexing::Slice(num_diags, num_diags + n)}, vert_vert);
-        // C-D cross
-        MTM.index_put_({h, torch::indexing::Slice(0, 0 + num_diags),
-                       torch::indexing::Slice(num_diags, num_diags + n)}, diag_vert);
-        MTM.index_put_({h, torch::indexing::Slice(num_diags, num_diags + n),
-                       torch::indexing::Slice(0, 0 + num_diags)}, diag_vert.t());
+    // 填充单份 MTM；所有 head 共享这个结构矩阵
+    // C block
+    MTM.index_put_({torch::indexing::Slice(0, num_diags),
+                    torch::indexing::Slice(0, num_diags)}, diag_diag);
+    // D block
+    MTM.index_put_({torch::indexing::Slice(num_diags, num_diags + n),
+                    torch::indexing::Slice(num_diags, num_diags + n)}, vert_vert);
+    // C-D cross
+    MTM.index_put_({torch::indexing::Slice(0, num_diags),
+                    torch::indexing::Slice(num_diags, num_diags + n)}, diag_vert);
+    MTM.index_put_({torch::indexing::Slice(num_diags, num_diags + n),
+                    torch::indexing::Slice(0, num_diags)}, diag_vert.t());
 
-        // C-E and E-C
-        MTM.index_put_({h, torch::indexing::Slice(0, 0 + num_diags), num_diags + n}, diag_block);
-        MTM.index_put_({h, num_diags + n, torch::indexing::Slice(0, 0 + num_diags)}, diag_block);
+    // C-E and E-C
+    MTM.index_put_({torch::indexing::Slice(0, num_diags), num_diags + n}, diag_block);
+    MTM.index_put_({num_diags + n, torch::indexing::Slice(0, num_diags)}, diag_block);
 
-        // D-E and E-D
-        MTM.index_put_({h, torch::indexing::Slice(num_diags, num_diags + n), num_diags + n}, vert_block);
-        MTM.index_put_({h, num_diags + n, torch::indexing::Slice(num_diags, num_diags + n)}, vert_block);
+    // D-E and E-D
+    MTM.index_put_({torch::indexing::Slice(num_diags, num_diags + n), num_diags + n}, vert_block);
+    MTM.index_put_({num_diags + n, torch::indexing::Slice(num_diags, num_diags + n)}, vert_block);
 
-        // E-E
-        MTM[h][num_diags + n][num_diags + n] = block_block_val;
-    }
+    // E-E
+    MTM.index_put_({num_diags + n, num_diags + n}, block_block_val);
 
     // 正则化（对角线）
-    auto eye = torch::eye(total_features, options);
-    for (int h = 0; h < head_num; h++) {
-        MTM[h] += eye * regularization;
-    }
+    MTM += torch::eye(total_features, options) * regularization;
 
     return MTM;
 }

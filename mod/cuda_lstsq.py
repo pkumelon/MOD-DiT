@@ -8,8 +8,8 @@ import torch
 import os
 import threading
 from torch.utils.cpp_extension import load
-_MTM = None
-_MTM_lock = threading.Lock()
+_FACTOR_CACHE = {}
+_FACTOR_CACHE_LOCK = threading.Lock()
 
 # 尝试加载编译好的CUDA扩展
 _cuda_lstsq = None
@@ -40,96 +40,52 @@ def _load_cuda_extension():
         return None
 
 def compute_mtm_pytorch(S_T, blocks_per_frame, regularization=1e-3):
-    """
-    PyTorch实现的M^T·M计算（作为fallback）
-    
-    参数:
-        S_T: 第t步的attention map, shape (head, n, n)
-        regularization: 正则化系数
-    
-    返回:
-        MTM: M^T·M矩阵, shape (total_features, total_features)
-    """
-    head_num = S_T.shape[0]
+    """构造所有 attention head 共享的单份 M^T·M 矩阵。"""
     n = S_T.shape[1]
     num_diags = 2 * n - 1
-    total_features = 1 + num_diags + n
-    
+    total_features = num_diags + n + 1
     device = S_T.device
     dtype = S_T.dtype
-    
-    MTM = torch.zeros(head_num, total_features, total_features, device=device, dtype=dtype)
-    
-    
-    # 5. 对角线C_i与C_j的内积
-    for i in range(num_diags):
-        offset_i = i - (n - 1)
-        for j in range(i, num_diags):
-            offset_j = j - (n - 1)
-            if offset_i == offset_j:
-                # 同一条对角线
-                diag_len = n - abs(offset_i)
-                MTM[:, i, j] = float(diag_len)
-                if i != j:
-                    MTM[:, j, i] = float(diag_len)
-    
-    # 6. 垂直线D_i与D_j的内积
-    for i in range(n):
-        for j in range(i, n):
-            val = float(n) if i == j else 0.0
-            MTM[:, num_diags + i, num_diags + j] = val
-            if i != j:
-                MTM[:, num_diags + j, num_diags + i] = val
 
-    # 7. 对角线C_i与垂直线D_j的内积
-    for i in range(num_diags):
-        offset = i - (n - 1)
-        for j in range(n):
-            # 对角线i与垂直线j的交点
-            overlap = 0.0
-            if offset >= 0:
-                # 主对角线及上方
-                if j >= offset and j < n:
-                    overlap = 1.0
-            else:
-                # 主对角线下方
-                if j < n + offset:
-                    overlap = 1.0
-            MTM[:, i, num_diags + j] = overlap
-            MTM[:, num_diags + j, i] = overlap
+    MTM = torch.zeros(total_features, total_features, device=device, dtype=dtype)
 
-    # 8. 块E_i与E_j的内积
+    offsets = torch.arange(-(n - 1), n, device=device)
+    diag_indices = torch.arange(num_diags, device=device)
+    MTM[diag_indices, diag_indices] = (n - offsets.abs()).to(dtype)
+
+    vert_indices = num_diags + torch.arange(n, device=device)
+    MTM[vert_indices, vert_indices] = float(n)
+
+    columns = torch.arange(n, device=device).unsqueeze(0)
+    offset_grid = offsets.unsqueeze(1)
+    diag_vert = torch.where(
+        offset_grid >= 0,
+        columns >= offset_grid,
+        columns < n + offset_grid,
+    ).to(dtype)
+    MTM[:num_diags, num_diags:num_diags + n] = diag_vert
+    MTM[num_diags:num_diags + n, :num_diags] = diag_vert.transpose(0, 1)
+
     num_blocks = n // blocks_per_frame
-    block_starts = torch.arange(0, n, blocks_per_frame, device=device)
-    total = torch.zeros(head_num, device=device, dtype=dtype)
-    MTM[:, num_diags + n, num_diags + n] = num_blocks * (blocks_per_frame ** 2)
+    covered_columns = num_blocks * blocks_per_frame
+    diag_block = torch.where(
+        offsets.abs() < blocks_per_frame,
+        num_blocks * (blocks_per_frame - offsets.abs()),
+        torch.zeros_like(offsets),
+    ).to(dtype)
+    MTM[:num_diags, -1] = diag_block
+    MTM[-1, :num_diags] = diag_block
 
-    # 9. 对角线C_i与块E_j的内积
-    for i in range(num_diags):
-        offset = i - (n - 1)
-        overlap = torch.zeros(head_num, device=device, dtype=dtype)
-        for j in range(num_blocks):
-            start = block_starts[j].item()
-            # 计算对角线与块的重叠
-            for k in range(blocks_per_frame):
-                row = start + k
-                if offset >= 0:
-                    col = row + offset
-                else:
-                    col = row + offset  # offset是负数
-                if col >= start and col < start + blocks_per_frame:
-                    overlap += 1.0
-        MTM[:, i, num_diags + n] = overlap
-        MTM[:, num_diags + n, i] = overlap
-    
-    # 10. 垂直线D_i与块E_j的内积
-    for i in range(n):
-        MTM[:, num_diags + i, num_diags + n] = blocks_per_frame
-        MTM[:, num_diags + n, num_diags + i] = blocks_per_frame
+    vert_block = torch.where(
+        torch.arange(n, device=device) < covered_columns,
+        blocks_per_frame,
+        0,
+    ).to(dtype)
+    MTM[num_diags:num_diags + n, -1] = vert_block
+    MTM[-1, num_diags:num_diags + n] = vert_block
+    MTM[-1, -1] = float(num_blocks * blocks_per_frame * blocks_per_frame)
 
-    # 添加正则化（对角线）以确保数值稳定性
-    MTM += torch.eye(total_features, device=device, dtype=dtype).unsqueeze(0) * regularization
-    
+    MTM += torch.eye(total_features, device=device, dtype=dtype) * regularization
     return MTM
 
 def compute_mts_pytorch(S_T, blocks_per_frame):
@@ -182,23 +138,92 @@ def compute_mts_pytorch(S_T, blocks_per_frame):
 
     return MTS
 
+def _factor_cache_key(S_T, blocks_per_frame, regularization):
+    device = S_T.device
+    return (
+        device.type,
+        device.index,
+        S_T.shape[1],
+        int(blocks_per_frame),
+        float(regularization),
+        S_T.dtype,
+    )
+
+
+def _get_cached_factor(S_T, blocks_per_frame, regularization, cuda_ext):
+    """按矩阵结构缓存一次分解；所有 head 和后续调用共享。"""
+    key = _factor_cache_key(S_T, blocks_per_frame, regularization)
+    factor = _FACTOR_CACHE.get(key)
+    if factor is not None:
+        return factor
+
+    with _FACTOR_CACHE_LOCK:
+        factor = _FACTOR_CACHE.get(key)
+        if factor is not None:
+            return factor
+
+        try:
+            if cuda_ext is None:
+                raise RuntimeError("CUDA extension is unavailable")
+            MTM = cuda_ext.compute_mtm(S_T, blocks_per_frame, regularization)
+        except Exception as e:
+            print(f"CUDA MTM computation failed: {e}, falling back to PyTorch")
+            MTM = compute_mtm_pytorch(S_T, blocks_per_frame, regularization)
+
+        if MTM.dim() != 2 or MTM.shape[0] != MTM.shape[1]:
+            raise RuntimeError(f"Expected a square 2D MTM matrix, got shape {tuple(MTM.shape)}")
+
+        try:
+            factor = ("cholesky", torch.linalg.cholesky(MTM))
+        except RuntimeError:
+            try:
+                lu, pivots = torch.linalg.lu_factor(MTM)
+                factor = ("lu", lu, pivots)
+            except RuntimeError:
+                factor = ("pinv", torch.linalg.pinv(MTM))
+
+        _FACTOR_CACHE[key] = factor
+        return factor
+
+
+def _solve_all_heads(factor, MTS):
+    """把所有 head 作为多个 RHS，一次求解共享系数矩阵。"""
+    if MTS.dim() != 2:
+        raise RuntimeError(f"Expected MTS with shape [head, feature], got {tuple(MTS.shape)}")
+
+    rhs = MTS.transpose(0, 1).contiguous()
+    method = factor[0]
+    matrix_size = factor[1].shape[-1]
+    if rhs.shape[0] != matrix_size:
+        raise RuntimeError(
+            f"MTS feature dimension {rhs.shape[0]} does not match factor size {matrix_size}"
+        )
+
+    if method == "cholesky":
+        solution = torch.cholesky_solve(rhs, factor[1])
+    elif method == "lu":
+        solution = torch.linalg.lu_solve(factor[1], factor[2], rhs)
+    else:
+        solution = factor[1] @ rhs
+    return solution.transpose(0, 1).contiguous()
+
+
 def solve_lstsq(warmup_state, S_T, step, blocks_per_frame, layer_idx=0, regularization=1e-5, use_cuda=True):
     """
     求解最小二乘问题: min ||S_T - MX||^2
     理论解: X = (M^T·M)^{-1} · M^T·S_T
     
     参数:
-        S_T: 当前步的attention map, shape (n, n)
-        block_starts: 块起始索引, shape (num_blocks,) 或 None
-        block_sizes: 块大小, shape (num_blocks,) 或 None
-        regularization: 正则化系数，用于数值稳定性（默认改为1e-4）
+        S_T: 当前步的attention map, shape (head, n, n)
+        blocks_per_frame: 每个帧包含的attention块数量
+        regularization: 正则化系数，用于数值稳定性
         use_cuda: 是否使用CUDA加速
     
     返回:
         特征字典 {
-            'c': Tensor，对角线亮度值，shape (2n-1,)
-            'd': Tensor，垂直线亮度值，shape (n,)
-            'e': Tensor，块亮度值，shape (num_blocks,)
+            'c': Tensor，垂直线亮度值，shape (head, n)
+            'd': Tensor，对角线亮度值，shape (head, 2n-1)
+            'b_d': Tensor，块对角亮度值，shape (head,)
         }
     """
     num_heads = S_T.shape[0]
@@ -208,75 +233,19 @@ def solve_lstsq(warmup_state, S_T, step, blocks_per_frame, layer_idx=0, regulari
     
     # 尝试使用CUDA加速
     cuda_ext = _load_cuda_extension() if use_cuda else None
-    global _MTM
-    if _MTM is None:
-        with _MTM_lock:
-            if _MTM is None:
-                try:
-                # 使用CUDA实现
-                    _MTM = cuda_ext.compute_mtm(S_T, blocks_per_frame, regularization)
-                except Exception as e:
-                    print(f"CUDA execution failed: {e}, falling back to PyTorch")
-                    _MTM = compute_mtm_pytorch(S_T, blocks_per_frame, regularization)
-    MTM = _MTM
+
     try:
-        # 使用CUDA实现
+        if cuda_ext is None:
+            raise RuntimeError("CUDA extension is unavailable")
         MTS = cuda_ext.compute_mts(S_T, blocks_per_frame)
     except Exception as e:
-        print(f"CUDA execution failed: {e}, falling back to PyTorch")
+        print(f"CUDA MTS computation failed: {e}, falling back to PyTorch")
         MTS = compute_mts_pytorch(S_T, blocks_per_frame)
 
     if step > warmup_state['warmup_steps'] - 2:
-        # 求解线性系统 MTM · X = MTS
-        
-        # 安全的逐个头求解，避免数值稳定性问题
-        X_list = []
-        for head_idx in range(MTM.shape[0]):
-            try:
-                MTM_head = MTM[head_idx]  # 形状: [total_features, total_features]
-                
-                # 确保MTS_head形状正确
-                if MTS.dim() == 2 and MTS.shape[0] == MTM.shape[0]:
-                    MTS_head = MTS[head_idx].unsqueeze(1)  # 形状: [total_features, 1]
-                else:
-                    MTS_head = MTS.unsqueeze(1) if MTS.dim() == 2 else MTS
-                    if MTS_head.shape[0] == MTM.shape[0]:
-                        MTS_head = MTS_head[head_idx]
-                    else:
-                        MTS_head = MTS_head[0]  # 如果MTS只有一个头，使用第一个
-                
-                # 检查形状匹配
-                if MTM_head.shape[0] != MTS_head.shape[0]:
-                    # 调整到最小维度
-                    min_dim = min(MTM_head.shape[0], MTS_head.shape[0])
-                    MTM_head = MTM_head[:min_dim, :min_dim]
-                    MTS_head = MTS_head[:min_dim].unsqueeze(1)
-                
-                # 使用稳定的求解方法
-                try:
-                    # 首先尝试Cholesky分解（最稳定）
-                    L = torch.linalg.cholesky(MTM_head)
-                    X_head = torch.cholesky_solve(MTS_head, L)
-                except RuntimeError:
-                    # Cholesky失败，使用LU分解
-                    try:
-                        X_head = torch.linalg.solve(MTM_head, MTS_head)
-                    except RuntimeError:
-                        # 如果都失败，使用伪逆
-                        MTM_pinv = torch.linalg.pinv(MTM_head)
-                        X_head = MTM_pinv @ MTS_head
-                
-                X_list.append(X_head.squeeze(-1))
-                
-            except Exception as e:
-                print(f"头{head_idx}求解失败: {e}")
-                # 返回零向量作为fallback
-                X_head = torch.zeros(MTM_head.shape[0], device=MTM_head.device, dtype=MTM_head.dtype)
-                X_list.append(X_head)
-        
-        X = torch.stack(X_list)
-        
-        # 安全的解包结果
+        factor = _get_cached_factor(S_T, blocks_per_frame, regularization, cuda_ext)
+        X = _solve_all_heads(factor, MTS)
+
         total_features = X.shape[1]
         
         # 安全的索引范围检查
