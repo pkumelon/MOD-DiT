@@ -212,51 +212,6 @@ Modern vDiTs (e.g., CogVideoX, HunyuanVideo) adopt a decoder-only unified attent
 
 ---
 
-## Main Results
-
-All sparse baselines use the **same inference API** to ensure strict fairness. Settings follow the paper: **12 full-attention warm-up steps** and reconstruction interval **t = 10**.
-
-### HunyuanVideo (13B, 117 frames, 768x1280, A100)
-
-| Method | Sparsity | PSNR ↑ | SSIM ↑ | LPIPS ↓ | Subject Consist. ↑ | Imaging Qual. ↑ | Latency ↓ | Speedup ↑ |
-|:---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Full Attention | 0.00% | – | – | – | 0.9582 | 0.6693 | 6978 s | 1.00x |
-| MInference | 67.10% | 18.21 | 0.638 | 0.490 | 0.9300 | 0.6450 | 5286 s | 1.32x |
-| Radial Attention | 75.55% | 26.72 | **0.885** | 0.125 | 0.9312 | 0.6467 | 3731 s | 1.87x |
-| SVG | 71.22% | 26.44 | 0.861 | 0.170 | 0.8301 | 0.5928 | 3834 s | 1.82x |
-| SpargeAttn | 68.00% | 25.43 | 0.842 | 0.195 | 0.9339 | 0.6432 | 4105 s | 1.70x |
-| **MOD-DiT (Ours)** | **83.23%** | **27.73** | 0.879 | **0.119** | **0.9398** | **0.6587** | **3405 s** | **2.05x** |
-
-### Wan2.1 (14B, 69 frames, 768x1280, A100)
-
-| Method | Sparsity | PSNR ↑ | SSIM ↑ | LPIPS ↓ | Subject Consist. ↑ | Imaging Qual. ↑ | Latency ↓ | Speedup ↑ |
-|:---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Full Attention | 0.00% | – | – | – | 0.9623 | 0.6722 | 3375 s | 1.00x |
-| MInference | 60.50% | 15.81 | 0.675 | 0.343 | 0.9100 | 0.6550 | 2557 s | 1.32x |
-| Radial Attention | 71.33% | 21.57 | 0.818 | 0.167 | 0.9152 | 0.6620 | 2021 s | 1.67x |
-| SVG | 69.08% | 20.93 | 0.795 | 0.222 | 0.7986 | 0.6133 | 2109 s | 1.60x |
-| SpargeAttn | 50.10% | 18.67 | 0.735 | 0.198 | 0.9033 | 0.6645 | 2296 s | 1.47x |
-| **MOD-DiT (Ours)** | **81.37%** | **22.75** | **0.821** | **0.152** | **0.9427** | **0.6674** | **1929 s** | **1.75x** |
-
-### CogVideoX-v1.5 (2B, 89 frames, 640x512, A800)
-
-| Method | Sparsity | PSNR ↑ | SSIM ↑ | LPIPS ↓ | Subject Consist. ↑ | Imaging Qual. ↑ | Latency ↓ | Speedup ↑ |
-|:---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Full Attention | 0.00% | – | – | – | 0.9230 | 0.6255 | 987 s | 1.00x |
-| MInference | 64.90% | 15.01 | 0.601 | 0.334 | 0.8679 | 0.5580 | 696 s | 1.42x |
-| Radial Attention | 70.70% | 22.89 | 0.866 | 0.172 | 0.9214 | 0.6167 | 611 s | 1.62x |
-| SVG | 75.00% | 21.15 | 0.818 | 0.183 | 0.9158 | 0.5948 | 596 s | 1.65x |
-| SpargeAttn | 67.30% | 20.34 | 0.773 | 0.255 | 0.9043 | 0.5966 | 661 s | 1.49x |
-| **MOD-DiT (Ours)** | **80.10%** | **25.77** | **0.868** | **0.133** | **0.9266** | **0.6239** | **542 s** | **1.82x** |
-
-### Orthogonal to Step Distillation
-
-MOD-DiT is complementary to timestep-distilled models. Applied on top of **FastWan (8-step)**, it delivers an **additional 1.56x speedup** (327 s → 210 s) with negligible degradation across all VBench quality metrics.
-
-> Quality metrics are reported on [VBench](https://github.com/Vchitect/VBench) prompts. PSNR / SSIM / LPIPS measure fidelity relative to the original full-attention outputs.
-
----
-
 ## Installation
 
 We recommend **CUDA 12.4** with **PyTorch 2.5.1**.
