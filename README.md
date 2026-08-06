@@ -13,8 +13,8 @@
 
 **[Yuxi Liu](mailto:yuxiliu666@stu.pku.edu.cn)**<sup>1\*</sup> &nbsp;&nbsp;
 **[Yipeng Hu](mailto:2301213082@stu.pku.edu.cn)**<sup>1\*</sup> &nbsp;&nbsp;
-**[Zekun Zhang](mailto:2023090909020@std.uestc.edu.cn)**<sup>2\*</sup> &nbsp;&nbsp;
-**[Kunze Jiang](mailto:kzejiang@mail.ustc.edu.cn)**<sup>3</sup> &nbsp;&nbsp;
+**[Zekun Zhang](mailto:2023090909020@std.uestc.edu.cn)**<sup>1\*</sup> &nbsp;&nbsp;
+**[Kunze Jiang](mailto:kzejiang@mail.ustc.edu.cn)**<sup>2</sup> &nbsp;&nbsp;
 **[Kun Yuan](mailto:kunyuan@pku.edu.cn)**<sup>1†</sup>
 
 <sup>1</sup>Peking University &nbsp;&nbsp;
@@ -43,7 +43,6 @@
 - [Highlights](#highlights)
 - [Video Comparison](#video-comparison)
 - [Method](#method)
-- [Main Results](#main-results)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -55,10 +54,9 @@
 ---
 
 ## News
-
-- **[2026-01]** Paper released on [arXiv](https://arxiv.org/abs/2601.11641).
 - **[2026-07]** Code released, with support for **HunyuanVideo**, **Wan2.1**, and **CogVideoX-v1.5**.
-
+- **[2026-05]** 🎉 Paper accepted by **ICML 2026**.
+- **[2026-01]** Paper released on [arXiv](https://arxiv.org/abs/2601.11641).
 ---
 
 ## Highlights
