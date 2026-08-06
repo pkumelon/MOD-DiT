@@ -31,7 +31,6 @@
 
 <!-- TODO: Export Figure 1 from the paper and save it to assets/teaser.png -->
 <div align="center">
-  <img src="assets/teaser.png" alt="MOD-DiT qualitative comparison against other sparse attention methods" width="100%">
   <p><em>MOD-DiT achieves a consistent <b>2.05x</b> speedup on HunyuanVideo while keeping the generated videos almost identical to full attention.</em></p>
 </div>
 
@@ -189,7 +188,7 @@ Using prior information from early denoising steps, MOD-DiT fits an **efficient 
 
 <!-- TODO: Export the structural-pattern illustration from the paper and save it to assets/patterns.png -->
 <div align="center">
-  <img src="assets/patterns.png" alt="Three structural priors composing the attention map" width="80%">
+  <img src="assets/patterns.png" alt="Three structural priors composing the attention map" width="90%">
 </div>
 
 Given an attention map $S_t \in \mathbb{R}^{n \times n}$ at denoising step $t$, the approximation decomposes it over three structural bases, and the pattern intensities are recovered by solving a small regularized least-squares system:
