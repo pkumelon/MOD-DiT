@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/logo/logo.png" alt="MOD-DiT" width="620">
+
 # MOD-DiT
 
 ### Mixture of Distributions Matters: Dynamic Sparse Attention for Efficient Video Diffusion Transformers
