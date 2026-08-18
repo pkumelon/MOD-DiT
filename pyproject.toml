@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MoD-DiT"                 # 项目名称（可任意）
+version = "0.1.0"
+description = "My MoD package"
+authors = [{name = "Your Name", email = "you@example.com"}]
+license = "MIT"                  # 使用字符串，避免弃用警告
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.setuptools]
+packages = ["MoD"]               # 指定包名，默认在根目录查找

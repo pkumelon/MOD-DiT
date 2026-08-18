@@ -18,7 +18,6 @@ from sageattention import sageattn
 from spas_sage_attn import block_sparse_sage2_attn_cuda, spas_sage2_attn_meansim_topk_cuda
 
 from MoD.mod.get_radial_mask import get_radial_mask
-from MoD.mod.get_SVG_mask import get_svg_mask
 from MoD.mod.state import is_warmup_complete
 
 from MoD.mod.triton_flash_sparsity import flash_attn_with_sparsity_map
@@ -721,14 +720,6 @@ def SparseAttentionWithMap(
                     video_token_num=warmup_state.get('video_token_num',0),
                     block_size=warmup_state['block_size']
                 )
-            elif warmup_state['sparse_type'] == 'svg':
-                temporal_mask = get_svg_mask(mask_name='temporal', context_length=warmup_state['text_token_num'], num_frame=warmup_state['num_frames'],
-                                            frame_size=warmup_state['frame_size'], block_size=warmup_state['block_size'])
-                spatial_mask = get_svg_mask(mask_name='spatial', context_length=warmup_state['text_token_num'], num_frame=warmup_state['num_frames'],
-                                            frame_size=warmup_state['frame_size'], block_size=warmup_state['block_size'])
-                temporal_num_heads = num_heads // 2
-                spatial_num_heads = num_heads - temporal_num_heads
-                warmup_state['mask'] = torch.cat([temporal_mask.repeat(temporal_num_heads,1,1), spatial_mask.repeat(spatial_num_heads,1,1)], dim=0)
 
         mask_info = {
             'mask': warmup_state['mask'], # 返回的是 *下一步* 的 mask

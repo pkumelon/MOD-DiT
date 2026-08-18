@@ -232,6 +232,8 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https
 pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 pip install flashinfer-python
+pip install -e .
+cd MoD
 
 # 4. Build the sparse attention backends
 cd SpargeAttn
