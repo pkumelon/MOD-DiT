@@ -157,22 +157,15 @@ ffmpeg -i results/hunyuan_full/output.mp4 \
 ---
 
 ## Method
-
 MOD-DiT is built on a key observation: **attention maps in vDiTs are superpositions of structured patterns that evolve gradually across denoising steps.** Rather than treating each step independently, MOD-DiT models this evolution explicitly through a two-stage process.
 
-<!-- TODO: Export the method overview figure from the paper and save it to assets/framework.png -->
 <div align="center">
-  <img src="assets/framework.png" alt="MOD-DiT framework overview" width="90%">
+  <img src="assets/patterns.png" alt="Three structural priors composing the attention map" width="90%">
 </div>
 
 ### Stage 1 — Sparsity Map Reconstruction
 
 Using prior information from early denoising steps, MOD-DiT fits an **efficient linear approximation model** that unifies three core structural priors of the attention map. Solving this model yields per-pattern intensity scalars, which are then extrapolated to predict mask patterns for an entire upcoming denoising interval.
-
-<!-- TODO: Export the structural-pattern illustration from the paper and save it to assets/patterns.png -->
-<div align="center">
-  <img src="assets/patterns.png" alt="Three structural priors composing the attention map" width="90%">
-</div>
 
 Given an attention map $S_t \in \mathbb{R}^{n \times n}$ at denoising step $t$, the approximation decomposes it over three structural bases, and the pattern intensities are recovered by solving a small regularized least-squares system:
 
