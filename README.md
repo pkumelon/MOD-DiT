@@ -125,25 +125,6 @@ Full-resolution MP4:
 </sub>
 </div>
 
-### CogVideoX-v1.5 — 89 frames, 640x512, A800
-
-<table>
-<tr>
-<td width="50%" align="center"><b>Full Attention</b><br><sub>987 s &nbsp;|&nbsp; 1.00x</sub></td>
-<td width="50%" align="center"><b>MOD-DiT</b><br><sub>542 s &nbsp;|&nbsp; <b>1.82x</b> &nbsp;|&nbsp; 80.10% sparsity</sub></td>
-</tr>
-<tr>
-<td><img src="assets/videos/cogvideox_full.gif" alt="CogVideoX-v1.5 full attention" width="100%"></td>
-<td><img src="assets/videos/cogvideox_moddit.gif" alt="CogVideoX-v1.5 MOD-DiT" width="100%"></td>
-</tr>
-</table>
-
-<div align="center">
-<sub>
-Full-resolution MP4:
-<a href="assets/videos/cogvideox_full.mp4">full attention</a> ·
-<a href="assets/videos/cogvideox_moddit.mp4">MOD-DiT</a>
-</sub>
 </div>
 
 ### Reproducing These Comparisons
