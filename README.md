@@ -132,26 +132,17 @@ Full-resolution MP4:
 Generate both variants with the same prompt and seed, changing only `--sparse_type`:
 
 ```bash
-cd inference
+cd MoD/inference
 
 # Full attention reference
 python hunyuan_test.py --sparse_type full \
   --prompt "A charming little cat, adorned with a delicate red bow tie, strolls daintily across the emerald green grass." \
-  --output_dir ../results/hunyuan_full
+  --output_dir ../../results/hunyuan_full
 
 # MOD-DiT
 python hunyuan_test.py --sparse_type mod-dit \
   --prompt "A charming little cat, adorned with a delicate red bow tie, strolls daintily across the emerald green grass." \
-  --output_dir ../results/hunyuan_moddit
-```
-
-Then convert the outputs into README-friendly GIFs:
-
-```bash
-# Requires ffmpeg
-ffmpeg -i results/hunyuan_full/output.mp4 \
-  -vf "fps=12,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
-  -loop 0 assets/videos/hunyuan_full.gif
+  --output_dir ../../results/hunyuan_moddit
 ```
 
 ---
@@ -173,7 +164,7 @@ $$
 (M^\top M + \lambda I)\,X = M^\top S_t
 $$
 
-Because the design matrix $M$ depends only on the sequence geometry and not on the attention values, $M^\top M$ and its factorization are computed **once** and reused across all heads and all denoising steps. This is implemented as a dedicated CUDA extension in [`mod/cuda_lstsq_kernel.cu`](mod/cuda_lstsq_kernel.cu).
+Because the design matrix $M$ depends only on the sequence geometry and not on the attention values, $M^\top M$ and its factorization are computed **once** and reused across all heads and all denoising steps. This is implemented as a dedicated CUDA extension in [`MoD/mod/cuda_lstsq_kernel.cu`](MoD/mod/cuda_lstsq_kernel.cu).
 
 ### Stage 2 — Online Block Masking
 
@@ -207,7 +198,6 @@ pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 pip install flashinfer-python
 pip install -e .
-cd MoD
 
 # 4. Build the sparse attention backends
 cd SpargeAttn
@@ -219,22 +209,22 @@ python setup.py install
 cd ..
 ```
 
-> **Note.** The CUDA extension for the least-squares solver in `mod/` is JIT-compiled on first use via `torch.utils.cpp_extension.load`, so a working `nvcc` matching your PyTorch CUDA version is required. The first run therefore includes a one-time compilation cost.
+> **Note.** The CUDA extension for the least-squares solver in `MoD/mod/` is JIT-compiled on first use via `torch.utils.cpp_extension.load`, so a working `nvcc` matching your PyTorch CUDA version is required. The first run therefore includes a one-time compilation cost.
 
 ---
 
 ## Quick Start
 
-Each supported model has a dedicated entry point under [`inference/`](inference). Set `--cache_dir` to the directory holding your pretrained weights.
+Each supported model has a dedicated entry point under [`MoD/inference/`](MoD/inference). Set `--cache_dir` to the directory holding your pretrained weights.
 
 ### HunyuanVideo
 
 ```bash
-cd inference
+cd MoD/inference
 python hunyuan_test.py \
   --prompt "A charming little cat, adorned with a delicate red bow tie, strolls daintily across the emerald green grass." \
   --cache_dir /path/to/pretrained_models \
-  --output_dir ../results/hunyuan \
+  --output_dir ../../results/hunyuan \
   --height 768 --width 1280 --frames 117 \
   --sparse_type mod-dit \
   --warmup_steps 12 \
@@ -246,11 +236,11 @@ python hunyuan_test.py \
 ### Wan2.1
 
 ```bash
-cd inference
+cd MoD/inference
 python wan_test.py \
   --prompt "A charming little cat, adorned with a delicate red bow tie, strolls daintily across the emerald green grass." \
   --cache_dir /path/to/pretrained_models \
-  --output_dir ../results/wan \
+  --output_dir ../../results/wan \
   --height 768 --width 1280 --frames 69 \
   --sparse_type mod-dit \
   --warmup_steps 12 \
@@ -292,23 +282,38 @@ python hunyuan_test.py --sparse_type full   # dense reference
 
 ## Project Structure
 
-```
+```text
 MOD-DiT/
-├── mod/                          # Core MOD-DiT algorithm
-│   ├── attn_mask.py              # Adaptive mask generation and sparse attention dispatch
-│   ├── cuda_lstsq.py             # Least-squares solver with cached factorization
-│   ├── cuda_lstsq_kernel.cu      # CUDA kernels for the structural least-squares system
-│   ├── triton_flash_sparsity.py  # Fused Triton kernel: attention + sparsity map
-│   ├── get_radial_mask.py        # Radial Attention baseline
-│   └── state.py                  # Warmup / prediction state management
-├── inference/                    # Entry points for each supported model
-│   ├── hunyuan_test.py
-│   ├── wan_test.py
-│   └── cogvideo_test.py
-├── models/                       # Patched model definitions
-├── SageAttention/                # Submodule: quantized attention kernels
-├── SpargeAttn/                   # Submodule: block-sparse attention kernels
-└── requirements.txt
+├── MoD/                                # Installable Python package
+│   ├── mod/                            # Core MOD-DiT algorithm
+│   │   ├── attn_mask.py                # Adaptive mask generation and sparse attention dispatch
+│   │   ├── cuda_lstsq.py               # Least-squares solver with cached factorization
+│   │   ├── cuda_lstsq_kernel.cu        # CUDA kernels for the structural least-squares system
+│   │   ├── triton_flash_sparsity.py    # Fused Triton kernel: attention + sparsity map
+│   │   ├── get_radial_mask.py          # Radial Attention baseline
+│   │   ├── logger.py                   # Logging utilities
+│   │   ├── state.py                    # Warmup / prediction state management
+│   │   └── utils.py                    # Shared runtime utilities
+│   ├── inference/                      # Entry points and launch scripts
+│   │   ├── hunyuan_test.py
+│   │   ├── wan_test.py
+│   │   ├── cogvideo_test.py
+│   │   ├── run_hunyuan.sh
+│   │   ├── run_wan.sh
+│   │   └── run_cogvideox.sh
+│   └── models/                         # Model-specific sparse-attention integrations
+│       ├── hunyuan/
+│       ├── wan/
+│       └── cogvideox/
+├── assets/                             # README images and video placeholders
+│   ├── logo/
+│   ├── videos/
+│   └── patterns.png
+├── pyproject.toml                      # Python package configuration
+├── requirements.txt                   # Python dependencies
+├── .gitmodules                        # Sparse-attention backend metadata
+├── LICENSE
+└── README.md
 ```
 
 ---

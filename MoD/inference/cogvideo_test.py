@@ -3,7 +3,7 @@ import argparse
 import torch
 from diffusers import CogVideoXPipeline
 from diffusers.utils import export_to_video
-from MoD.mod.cogvideox.utils import replace_cogvideox_attention
+from MoD.models.cogvideox.utils import replace_cogvideox_attention
 from MoD.mod.logger import setup_logger
 from typing import Dict, List, Tuple, Optional
 
