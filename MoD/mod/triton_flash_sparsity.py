@@ -1,20 +1,28 @@
 """
-FlashAttention + block-level sparsity map .
-主要是flashattention用的onlinesoftmax不好改成能反馈中间结果的状态，这里相当于加了一个专门算sparsity attention map的triton
-Architecture:
-  Pass 1 – flash_attn_func (Dao's optimized CUDA kernel) → O, logsumexp L
-  Pass 2 – Lightweight Triton kernel: re-scan Q,K with L to count sparsity in log domain
+FlashAttention plus an exact video-video block sparsity map.
 
-Inputs:  query, key, value (B, H, S, D), threshold (float), block_size (int: 64 or 128), model_type
-Outputs: attention output (B, H, S, D), sparsity_map (B, H, video_block_num, video_block_num)
+Pass 1 uses FlashAttention to produce the attention output and final row LSE.
+Pass 2 replays tiled QK products and counts probabilities below the threshold:
+an SM80 CUDA Tensor Core kernel is preferred, with Triton as a fallback.
+
+Inputs: query, key, value (B, H, S, D), threshold, block_size (64 or 128), model_type.
+Outputs: attention output (B, H, S, D), sparsity map (B, H, video_blocks, video_blocks).
 """
+
+import math
+import os
+import warnings
+from typing import Tuple
 
 import torch
 import triton
 import triton.language as tl
-import math
-from typing import Tuple
 from flash_attn import flash_attn_func
+
+from MoD.mod.cuda_flash_sparsity import cuda_backend_supported, cuda_sparsity_map
+
+
+_AUTO_FALLBACK_WARNED = False
 
 
 @triton.jit
@@ -90,6 +98,179 @@ def _sparsity_kernel(
         tl.store(s_ptr, sparsity.to(Sparsity.dtype.element_ty))
 
 
+def _video_layout(
+    model_type: str,
+    sequence_length: int,
+    video_token_num: int,
+    text_token_num: int,
+    block_size: int,
+) -> Tuple[int, int, int]:
+    if model_type == "wan":
+        if video_token_num not in (0, sequence_length):
+            raise ValueError(
+                f"wan expects video_token_num to be 0 or S={sequence_length}, got {video_token_num}"
+            )
+        return sequence_length // block_size, 0, 0
+    if model_type == "hunyuan":
+        return video_token_num // block_size, 0, 0
+    if model_type == "cogvideox":
+        return video_token_num // block_size, text_token_num, text_token_num
+    raise ValueError(
+        f"Unknown model_type: {model_type}, expected 'wan', 'hunyuan', or 'cogvideox'"
+    )
+
+
+def _validate_inputs(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    threshold,
+    block_size: int,
+    model_type: str,
+    video_token_num: int,
+    text_token_num: int,
+) -> Tuple[float, int, int, int]:
+    if query.ndim != 4:
+        raise ValueError(f"query must have shape [B, H, S, D], got {tuple(query.shape)}")
+    if key.shape != query.shape or value.shape != query.shape:
+        raise ValueError("query, key, and value must have identical [B, H, S, D] shapes")
+    if not query.is_cuda or not key.is_cuda or not value.is_cuda:
+        raise ValueError("query, key, and value must be CUDA tensors")
+    if query.device != key.device or query.device != value.device:
+        raise ValueError("query, key, and value must be on the same CUDA device")
+    if query.dtype != key.dtype or query.dtype != value.dtype:
+        raise ValueError("query, key, and value must have the same dtype")
+    if query.dtype not in (torch.float16, torch.bfloat16):
+        raise TypeError(f"expected float16 or bfloat16 inputs, got {query.dtype}")
+    if block_size not in (64, 128):
+        raise ValueError(f"block_size must be 64 or 128, got {block_size}")
+
+    _, _, sequence_length, head_dim = query.shape
+    if head_dim not in (64, 128):
+        raise ValueError(f"head_dim must be 64 or 128, got {head_dim}")
+    if model_type == "wan":
+        video_tokens = sequence_length
+    else:
+        if video_token_num <= 0:
+            raise ValueError(f"video_token_num must be positive for {model_type}")
+        video_tokens = video_token_num
+    if video_tokens % block_size:
+        raise ValueError(
+            f"video_token_num={video_tokens} must be divisible by block_size={block_size}"
+        )
+    if text_token_num < 0:
+        raise ValueError("text_token_num must be non-negative")
+    if model_type in ("hunyuan", "cogvideox") and video_token_num + text_token_num > sequence_length:
+        raise ValueError("video and text regions exceed the sequence length")
+
+    if torch.is_tensor(threshold):
+        if threshold.numel() != 1:
+            raise ValueError("threshold tensor must contain one element")
+        threshold_value = float(threshold.detach().item())
+    else:
+        threshold_value = float(threshold)
+    if math.isnan(threshold_value):
+        raise ValueError("threshold must not be NaN")
+
+    video_blocks, q_offset, k_offset = _video_layout(
+        model_type, sequence_length, video_token_num, text_token_num, block_size
+    )
+    return threshold_value, video_blocks, q_offset, k_offset
+
+
+def _triton_sparsity_map(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    lse: torch.Tensor,
+    *,
+    softmax_scale: float,
+    log_threshold: float,
+    q_video_offset: int,
+    k_video_offset: int,
+    video_blocks: int,
+    block_size: int,
+) -> torch.Tensor:
+    batch, heads, sequence_length, head_dim = query.shape
+    sparsity_map = torch.empty(
+        batch,
+        heads,
+        video_blocks,
+        video_blocks,
+        device=query.device,
+        dtype=torch.float16,
+    )
+    num_warps = 4 if head_dim <= 64 else 8
+    _sparsity_kernel[(video_blocks, batch * heads)](
+        query,
+        key,
+        lse,
+        sparsity_map,
+        softmax_scale,
+        log_threshold,
+        query.stride(0), query.stride(1), query.stride(2), query.stride(3),
+        key.stride(0), key.stride(1), key.stride(2), key.stride(3),
+        lse.stride(0), lse.stride(1), lse.stride(2),
+        sparsity_map.stride(0), sparsity_map.stride(1),
+        sparsity_map.stride(2), sparsity_map.stride(3),
+        heads,
+        sequence_length,
+        q_video_offset,
+        k_video_offset,
+        video_blocks,
+        BLOCK_SIZE=block_size,
+        BLOCK_D=head_dim,
+        num_warps=num_warps,
+        num_stages=2,
+    )
+    return sparsity_map
+
+
+def _compute_sparsity_map(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    lse: torch.Tensor,
+    *,
+    softmax_scale: float,
+    log_threshold: float,
+    q_video_offset: int,
+    k_video_offset: int,
+    video_blocks: int,
+    block_size: int,
+) -> torch.Tensor:
+    global _AUTO_FALLBACK_WARNED
+    backend = os.environ.get("MOD_DIT_SPARSITY_BACKEND", "auto").lower()
+    if backend not in {"auto", "cuda", "triton"}:
+        raise ValueError(
+            "MOD_DIT_SPARSITY_BACKEND must be one of: auto, cuda, triton"
+        )
+
+    kwargs = dict(
+        softmax_scale=softmax_scale,
+        log_threshold=log_threshold,
+        q_video_offset=q_video_offset,
+        k_video_offset=k_video_offset,
+        video_blocks=video_blocks,
+        block_size=block_size,
+    )
+    if backend in {"auto", "cuda"} and cuda_backend_supported(query.device):
+        try:
+            return cuda_sparsity_map(query, key, lse, **kwargs)
+        except RuntimeError as error:
+            if backend == "cuda":
+                raise
+            if not _AUTO_FALLBACK_WARNED:
+                warnings.warn(
+                    f"CUDA sparsity backend unavailable; falling back to Triton: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                _AUTO_FALLBACK_WARNED = True
+    elif backend == "cuda":
+        raise RuntimeError("CUDA sparsity backend requires an SM80 or newer GPU")
+
+    return _triton_sparsity_map(query, key, lse, **kwargs)
+
+
 @torch.no_grad()
 def flash_attn_with_sparsity_map(
     query: torch.Tensor,
@@ -108,7 +289,8 @@ def flash_attn_with_sparsity_map(
         query, key, value: (B, H, S, D) fp16/bf16
         threshold: sparsity threshold
         block_size: 64 or 128
-        model_type: "hunyuan" (video first) or "cogvideox" (text first)
+        model_type: "wan" (video only), "hunyuan" (video first), or
+            "cogvideox" (text first)
         video_token_num: number of video tokens
         text_token_num: number of text tokens
 
@@ -116,10 +298,17 @@ def flash_attn_with_sparsity_map(
         output:       (B, H, S, D)
         sparsity_map: (B, H, video_block_num, video_block_num)
     """
+    threshold_value, video_block_num, q_video_offset, k_video_offset = _validate_inputs(
+        query,
+        key,
+        value,
+        threshold,
+        block_size,
+        model_type,
+        video_token_num,
+        text_token_num,
+    )
     B, H, S, D = query.shape
-    assert S % block_size == 0, f"S={S} must be divisible by block_size={block_size}"
-    assert D in {64, 128}, f"head_dim={D}, expected 64 or 128"
-
     query, key, value = query.contiguous(), key.contiguous(), value.contiguous()
 
     # ── Pass 1: flash_attn → O, logsumexp ──
@@ -132,50 +321,21 @@ def flash_attn_with_sparsity_map(
         q_fa, k_fa, v_fa, softmax_scale=sm_scale, return_attn_probs=True)
 
     O = o_fa.transpose(1, 2)                    # (B, H, S, D)
-    L = softmax_lse                              # (B, H, S), ln domain, float32
+    L = softmax_lse.contiguous()                 # (B, H, S), ln domain, float32
 
-    # ── Determine video region offsets based on model_type ──
-    if model_type == "wan":
-        # wan: self-attention only has video tokens, no text tokens in sequence
-        video_block_num = S // block_size
-        q_video_offset = 0
-        k_video_offset = 0
-    elif model_type == "hunyuan":
-        # hunyuan: video tokens first, text tokens after
-        video_block_num = video_token_num // block_size
-        q_video_offset = 0
-        k_video_offset = 0
-    elif model_type == "cogvideox":
-        # cogvideox: text tokens first, video tokens after
-        video_block_num = video_token_num // block_size
-        q_video_offset = text_token_num
-        k_video_offset = text_token_num
-    else:
-        raise ValueError(f"Unknown model_type: {model_type}, expected 'wan', 'hunyuan', or 'cogvideox'")
-
-    # ── Pass 2: Triton sparsity kernel (video-video only) ──
-    ln_thresh = math.log(threshold) if threshold > 0 else float("-inf")
-
-    sparsity_map = torch.empty(B, H, video_block_num, video_block_num,
-                               device=query.device, dtype=torch.float16)
-
-    grid = (video_block_num, B * H)
-    num_warps = 4 if D <= 64 else 8
-
-    _sparsity_kernel[grid](
-        query, key, L, sparsity_map,
-        sm_scale, ln_thresh,
-        query.stride(0), query.stride(1), query.stride(2), query.stride(3),
-        key.stride(0), key.stride(1), key.stride(2), key.stride(3),
-        L.stride(0), L.stride(1), L.stride(2),
-        sparsity_map.stride(0), sparsity_map.stride(1),
-        sparsity_map.stride(2), sparsity_map.stride(3),
-        H, S,
-        q_video_offset, k_video_offset, video_block_num,
-        BLOCK_SIZE=block_size,
-        BLOCK_D=D,
-        num_warps=num_warps,
-        num_stages=2,
+    # Pass 2 replays video-video QK tiles using the final row LSE. The CUDA
+    # backend uses SM80 Tensor Cores; Triton remains the portable fallback.
+    ln_thresh = math.log(threshold_value) if threshold_value > 0 else float("-inf")
+    sparsity_map = _compute_sparsity_map(
+        query,
+        key,
+        L,
+        softmax_scale=sm_scale,
+        log_threshold=ln_thresh,
+        q_video_offset=q_video_offset,
+        k_video_offset=k_video_offset,
+        video_blocks=video_block_num,
+        block_size=block_size,
     )
 
     return O, sparsity_map
@@ -187,20 +347,23 @@ def _naive_attn_with_sparsity(query, key, value, threshold, block_size,
                                model_type="hunyuan", video_token_num=0, text_token_num=0):
     B, H, S, D = query.shape
     scale = D ** -0.5
-    video_block_num = video_token_num // block_size
+    effective_video_tokens = S if model_type == "wan" else video_token_num
+    video_block_num = effective_video_tokens // block_size
 
     scores = query.float() @ key.float().transpose(-1, -2) * scale
     probs = scores.softmax(dim=-1)
     output = (probs @ value.float()).to(query.dtype)
 
-    if model_type == "hunyuan":
+    if model_type in {"hunyuan", "wan"}:
         q_start, k_start = 0, 0
-    else:
+    elif model_type == "cogvideox":
         q_start, k_start = text_token_num, text_token_num
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
     # Extract video-video attention probs
-    p_video = probs[:, :, q_start:q_start + video_token_num,
-                          k_start:k_start + video_token_num]
+    p_video = probs[:, :, q_start:q_start + effective_video_tokens,
+                          k_start:k_start + effective_video_tokens]
     p_video = p_video.view(B, H, video_block_num, block_size, video_block_num, block_size)
     sparsity_map = p_video.lt(threshold).float().mean(dim=(3, 5)).to(torch.float16)
 

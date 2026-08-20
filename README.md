@@ -209,7 +209,7 @@ python setup.py install
 cd ..
 ```
 
-> **Note.** The CUDA extension for the least-squares solver in `MoD/mod/` is JIT-compiled on first use via `torch.utils.cpp_extension.load`, so a working `nvcc` matching your PyTorch CUDA version is required. The first run therefore includes a one-time compilation cost.
+> **Note.** The CUDA extensions under `MoD/mod/` are JIT-compiled on first use via `torch.utils.cpp_extension.load`, so a working `nvcc` matching your PyTorch CUDA version is required. This includes both the least-squares solver and the exact sparsity-map replay kernel. The first run therefore includes a one-time compilation cost. The sparsity kernel uses SM80 Tensor Cores on A100-class or newer GPUs and automatically falls back to Triton when unavailable.
 
 ---
 
@@ -275,6 +275,8 @@ python hunyuan_test.py --sparse_type full   # dense reference
 **Tuning guidance.**
 
 - Increasing `block_size` from 64 to 128 reduces latency with negligible impact on quality, and is the recommended setting.
+- The exact sparsity-map replay defaults to `MOD_DIT_SPARSITY_BACKEND=auto`: it prefers the SM80 CUDA Tensor Core kernel and falls back to Triton. Set the variable to `cuda` or `triton` to force a backend for diagnosis or benchmarking.
+- Benchmark the replay pass and the full FlashAttention call on A100 with `python benchmarks/benchmark_flash_sparsity.py`; JIT compilation is completed before timing begins.
 - Larger `predict_T` yields higher speedup but relies more heavily on extrapolation; `predict_T = 10` is the configuration used throughout the paper.
 - `warmup_steps` must remain large enough to fit the linear approximation reliably; `12` is used in all reported experiments.
 
@@ -289,7 +291,9 @@ MOD-DiT/
 │   │   ├── attn_mask.py                # Adaptive mask generation and sparse attention dispatch
 │   │   ├── cuda_lstsq.py               # Least-squares solver with cached factorization
 │   │   ├── cuda_lstsq_kernel.cu        # CUDA kernels for the structural least-squares system
-│   │   ├── triton_flash_sparsity.py    # Fused Triton kernel: attention + sparsity map
+│   │   ├── cuda_flash_sparsity.py      # Lazy loader for the exact CUDA sparsity replay
+│   │   ├── cuda_flash_sparsity_kernel.cu # SM80 Tensor Core QK replay and block counting
+│   │   ├── triton_flash_sparsity.py    # FlashAttention dispatch with CUDA/Triton backends
 │   │   ├── get_radial_mask.py          # Radial Attention baseline
 │   │   ├── logger.py                   # Logging utilities
 │   │   ├── state.py                    # Warmup / prediction state management
@@ -305,6 +309,10 @@ MOD-DiT/
 │       ├── hunyuan/
 │       ├── wan/
 │       └── cogvideox/
+├── benchmarks/                         # Reproducible CUDA/Triton microbenchmarks
+│   └── benchmark_flash_sparsity.py
+├── tests/                              # CUDA correctness and backend regression tests
+│   └── test_flash_sparsity.py
 ├── assets/                             # README images and video placeholders
 │   ├── logo/
 │   ├── videos/

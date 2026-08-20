@@ -1,5 +1,4 @@
 from typing import Dict
-import torch
 
 def init_warmup_state() -> Dict:
     """
@@ -40,8 +39,6 @@ def create_adaptive_mask_state(
     """
     创建自适应mask状态的便捷函数
     """
-    device = torch.cuda.current_device() if use_cuda else torch.device("cpu")
-
     # 算法中间变量
     state = init_warmup_state()
 
@@ -59,7 +56,7 @@ def create_adaptive_mask_state(
     # 算法相关参数
     state['warmup_steps'] = warmup_steps
     state['top_k'] = top_k
-    state['threshold'] = torch.tensor(threshold).to(device) # 阈值
+    state['threshold'] = float(threshold)  # Host scalar avoids a GPU sync before every map replay.
     state['block_size'] = block_size
     state['predict_T'] = predict_T
     state['use_cuda'] = use_cuda
