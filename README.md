@@ -77,11 +77,7 @@ MOD-DiT resolves this dilemma:
 
 ## Video Comparison
 
-Side-by-side comparison between the original **full attention** outputs and **MOD-DiT**, generated from identical prompts and seeds. MOD-DiT preserves subject identity, motion smoothness, and texture detail while cutting inference cost substantially.
-
-<!-- TODO: Place the comparison clips under assets/videos/ using the file names below.
-     Recommended: 480p-720p GIF (<10 MB each) for inline playback, plus the original MP4 for full quality.
-     GitHub renders GIFs inline, but does not autoplay local MP4 files in README tables. -->
+Side-by-side comparison between the original **full attention** outputs and **MOD-DiT**, generated from identical prompts and seeds. Click any preview to open the full-resolution MP4.
 
 ### HunyuanVideo — 117 frames, 768x1280, A100
 
@@ -91,18 +87,10 @@ Side-by-side comparison between the original **full attention** outputs and **MO
 <td width="50%" align="center"><b>MOD-DiT</b><br><sub>3405 s &nbsp;|&nbsp; <b>2.05x</b> &nbsp;|&nbsp; 83.23% sparsity</sub></td>
 </tr>
 <tr>
-<td><img src="assets/videos/hunyuan_full.gif" alt="HunyuanVideo full attention" width="100%"></td>
-<td><img src="assets/videos/hunyuan_moddit.gif" alt="HunyuanVideo MOD-DiT" width="100%"></td>
+<td><a href="assets/videos/hunyuan_full_output.mp4"><img src="assets/videos/hunyuan_full_output.gif" alt="HunyuanVideo full attention" width="100%"></a></td>
+<td><a href="assets/videos/hunyuan_mod_output.mp4"><img src="assets/videos/hunyuan_mod_output.gif" alt="HunyuanVideo MOD-DiT" width="100%"></a></td>
 </tr>
 </table>
-
-<div align="center">
-<sub>
-Full-resolution MP4:
-<a href="assets/videos/hunyuan_full.mp4">full attention</a> ·
-<a href="assets/videos/hunyuan_moddit.mp4">MOD-DiT</a>
-</sub>
-</div>
 
 ### Wan2.1 — 69 frames, 768x1280, A100
 
@@ -112,20 +100,10 @@ Full-resolution MP4:
 <td width="50%" align="center"><b>MOD-DiT</b><br><sub>1929 s &nbsp;|&nbsp; <b>1.75x</b> &nbsp;|&nbsp; 81.37% sparsity</sub></td>
 </tr>
 <tr>
-<td><img src="assets/videos/wan_full.gif" alt="Wan2.1 full attention" width="100%"></td>
-<td><img src="assets/videos/wan_moddit.gif" alt="Wan2.1 MOD-DiT" width="100%"></td>
+<td><a href="assets/videos/wan_full_output.mp4"><img src="assets/videos/wan_full_output.gif" alt="Wan2.1 full attention" width="100%"></a></td>
+<td><a href="assets/videos/wan_mod_output.mp4"><img src="assets/videos/wan_mod_output.gif" alt="Wan2.1 MOD-DiT" width="100%"></a></td>
 </tr>
 </table>
-
-<div align="center">
-<sub>
-Full-resolution MP4:
-<a href="assets/videos/wan_full.mp4">full attention</a> ·
-<a href="assets/videos/wan_moddit.mp4">MOD-DiT</a>
-</sub>
-</div>
-
-</div>
 
 ### Reproducing These Comparisons
 
